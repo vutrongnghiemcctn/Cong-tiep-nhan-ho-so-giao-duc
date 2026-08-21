@@ -7,6 +7,9 @@ import { Card } from "@/components/ui/card";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { cn, formatDateTime } from "@/lib/utils";
 
+// Xem app/admin/conversations/page.tsx — cùng lý do cần ép render động.
+export const dynamic = "force-dynamic";
+
 export default async function AdminConversationDetailPage({
   params,
 }: PageProps<"/admin/conversations/[id]">) {

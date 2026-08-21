@@ -13,6 +13,11 @@ import {
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { formatDateTime } from "@/lib/utils";
 
+// Luôn query lại Supabase mỗi request — trang không dùng cookies()/headers()
+// nên Next.js có thể prerender tĩnh lúc build nếu thiếu dòng này, khiến admin
+// thấy dữ liệu cũ (đứng yên từ lúc build) thay vì hội thoại mới nhất.
+export const dynamic = "force-dynamic";
+
 export default async function AdminConversationsPage() {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
