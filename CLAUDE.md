@@ -7,10 +7,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Về dự án
 
 `DuHoc24` — website mẫu "Cổng Tiếp Nhận Hồ Sơ Du Học", dùng cho khoá lập trình 6 tuần. Phần lớn app
-vẫn dùng **dữ liệu giả viết cứng** trong [lib/mock-data.ts](lib/mock-data.ts) (portal, admin, form
-báo giá) — chưa nối database hay auth thật. Ngoại lệ: chatbot ở trang chủ đã có API route thật
-([app/api/chat/route.ts](app/api/chat/route.ts)) gọi Gemini. Đừng giả định các phần còn lại có
-backend thật trừ khi thấy code gọi thật (Supabase client, API route khác, v.v.).
+vẫn dùng **dữ liệu giả viết cứng** trong [lib/mock-data.ts](lib/mock-data.ts) (portal, admin/requests,
+admin/schools, admin/profiles, form báo giá) — chưa nối database hay auth thật. Ngoại lệ: chatbot ở
+trang chủ và trang quản trị hội thoại đã nối database thật —
+[app/api/chat/route.ts](app/api/chat/route.ts) gọi Gemini **và** lưu hội thoại vào Supabase (bảng
+`conversations`/`messages`), còn [/admin/conversations](app/admin/conversations/page.tsx) đọc trực
+tiếp 2 bảng đó để hiển thị danh sách hội thoại và trang chi tiết từng tin nhắn
+([app/admin/conversations/[id]/page.tsx](<app/admin/conversations/[id]/page.tsx>)) — xem chi tiết ở
+mục Kiến trúc bên dưới. `lib/mock-data.ts` không còn export `Conversation`/`conversations` nữa (đã xoá
+vì không còn nơi nào dùng). Đừng giả định các phần còn lại có backend thật trừ khi thấy code gọi thật
+(Supabase client, API route khác, v.v.).
 
 Lộ trình các tuần tiếp theo (Supabase + form thật, đọc/trích xuất hồ sơ bằng Gemini, tự động hoá
 Make.com, auth qua magic link) được liệt kê chi tiết trong [README.md](README.md) — đọc phần đó nếu
@@ -49,22 +55,51 @@ Không có bộ test nào trong repo hiện tại.
   - `/admin/*` — khu vực quản trị, có layout riêng ([app/admin/layout.tsx](app/admin/layout.tsx))
     với sidebar cố định (`components/admin/sidebar.tsx`) bọc toàn bộ trang con:
     `requests`, `schools`, `profiles`, `conversations`. `/admin` tự chuyển hướng sang `/admin/requests`.
+    Trong 4 trang con này, chỉ `conversations` đọc dữ liệu thật (Supabase) — `requests`, `schools`,
+    `profiles` vẫn dùng mock từ `lib/mock-data.ts`.
 - **[app/api/chat/route.ts](app/api/chat/route.ts)** — API route thật đầu tiên của app, đứng sau
-  chatbot ở [components/landing/chat-widget.tsx](components/landing/chat-widget.tsx). Nhận
-  `{ message, history }`, gọi Gemini (`GEMINI_API_KEY`, chỉ dùng server-side) với system instruction
-  nhúng nguyên bộ câu hỏi/đáp cố định — model bị ép chỉ trả lời trong phạm vi bộ QnA đó, từ chối lịch
-  sự nếu hỏi ngoài phạm vi. Sửa nội dung QnA thì sửa trực tiếp mảng `QNA` trong file này.
-- **`lib/mock-data.ts` là nguồn dữ liệu và kiểu dữ liệu duy nhất** cho phần dữ liệu mock — các type
-  domain chính (`School`, `AdmissionRequest`, `StudentProfile`, `Conversation`, `DocStatus`,
-  `RequestStatus`, `ServicePackage`) đều định nghĩa ở đây và được import khắp `app/` và `components/`.
-  Khi thêm field/entity mới, sửa ở đây trước rồi mới lan ra UI.
+  chatbot ở [components/landing/chat-widget.tsx](components/landing/chat-widget.tsx).
+  - `POST` nhận `{ message }`, gọi Gemini (`GEMINI_API_KEY`, chỉ dùng server-side) với system
+    instruction nhúng nguyên bộ câu hỏi/đáp cố định — model bị ép chỉ trả lời trong phạm vi bộ QnA
+    đó, từ chối lịch sự nếu hỏi ngoài phạm vi (nhưng vẫn được dùng lịch sử hội thoại để trả lời câu
+    hỏi nối tiếp). Sửa nội dung QnA thì sửa trực tiếp mảng `QNA` trong file này.
+  - **Hội thoại được lưu vào Supabase**, không còn giữ ở state/localStorage phía client. Client
+    (`chat-widget.tsx`) không tự quản lý lịch sử nữa — mỗi lần mở trang nó gọi `GET /api/chat` để
+    lấy lại đúng hội thoại đã lưu, và `POST` chỉ gửi mỗi tin nhắn mới. Route tự đọc/ghi lịch sử từ
+    bảng `messages` trong Supabase làm nguồn duy nhất.
+  - Định danh hội thoại là cookie `dh24_conv` (`httpOnly`, cookie phiên — mất khi đóng hẳn trình
+    duyệt, JS phía client không đọc được). Route tạo dòng mới trong bảng `conversations` nếu chưa có
+    cookie, rồi ghi từng tin nhắn (`sender: 'user' | 'bot'`) vào bảng `messages`.
+  - Truy cập Supabase qua `lib/supabase-admin.ts` (`createAdminClient` từ package `@supabase/server`,
+    dùng `SUPABASE_SECRET_KEY`) — **chỉ import từ code server-side**, không bao giờ đưa vào component
+    `"use client"`. Cả 2 bảng đều bật RLS và **không có policy nào** cho anon/publishable key, nên kể
+    cả khi lỡ để lộ publishable key, trình duyệt vẫn không đọc/ghi được — chỉ server (secret key,
+    bypass RLS) mới truy cập được. Đổi schema thì generate lại `lib/database.types.ts` bằng Supabase
+    MCP (`generate_typescript_types`) hoặc `supabase gen types`, đừng sửa tay.
+  - Khi cần dùng `@supabase/server` ở chỗ khác trong repo (viết thêm route, Edge Function...), đọc
+    skill đã cài ở `.agents/skills/supabase-server/SKILL.md` trước — đặc biệt lưu ý dùng `auth`
+    (không phải `allow` cũ) và các key mới `SUPABASE_PUBLISHABLE_KEY`/`SUPABASE_SECRET_KEY` (không
+    phải `SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` cũ).
+- **[app/admin/conversations/page.tsx](app/admin/conversations/page.tsx)** (danh sách) và
+  **[app/admin/conversations/[id]/page.tsx](<app/admin/conversations/[id]/page.tsx>)** (chi tiết) —
+  Server Component, `await` trực tiếp `getSupabaseAdmin()` từ `lib/supabase-admin.ts` để đọc bảng
+  `conversations`/`messages` (không qua `app/api/chat/route.ts`, không cần API route riêng vì đây là
+  Server Component render trên server). Trang chi tiết dùng `notFound()` nếu id không tồn tại, tái
+  dùng style bong bóng chat giống `chat-widget.tsx` cho nhất quán.
+- **`lib/mock-data.ts` là nguồn dữ liệu và kiểu dữ liệu duy nhất** cho phần dữ liệu mock còn lại — các
+  type domain chính (`School`, `AdmissionRequest`, `StudentProfile`, `DocStatus`, `RequestStatus`,
+  `ServicePackage`) đều định nghĩa ở đây và được import khắp `app/` và `components/`. Khi thêm
+  field/entity mới, sửa ở đây trước rồi mới lan ra UI.
 - **`components/status-badge.tsx`** là nơi ánh xạ tập trung từ trạng thái (`DocStatus`,
   `RequestStatus`) sang label tiếng Việt + màu + icon (`docStatusMeta`, `requestStatusMeta`) — dùng
   lại các badge này (`DocStatusBadge`, `RequestStatusBadge`) thay vì tự tạo màu/label mới cho trạng thái.
 - Toàn bộ UI-facing text là **tiếng Việt**; giữ nguyên ngôn ngữ này khi thêm nội dung mới.
 - Biến môi trường nằm trong `.env` (không commit — xem Quy tắc Git, không có `.env.example` mẫu ở
-  bản này). Hiện có `GEMINI_API_KEY` (dùng bởi `app/api/chat/route.ts`); các biến Supabase/site URL
-  còn lại kế thừa từ template ban đầu, chưa dùng ở phần còn lại của app.
+  bản này). Hiện có `GEMINI_API_KEY` (dùng bởi `app/api/chat/route.ts`) và bộ biến Supabase server-only
+  do tích hợp Supabase tự điền: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`,
+  `SUPABASE_JWKS_URL` — tất cả đều **không** có prefix `NEXT_PUBLIC_`, chỉ đọc được ở server. Các biến
+  `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`/`NEXT_PUBLIC_SITE_URL` kế thừa từ template
+  ban đầu vẫn còn để trống, dành cho auth qua magic link ở Tuần 6 (lúc đó mới cần lộ ra client).
 
 ## Quy tắc Git
 

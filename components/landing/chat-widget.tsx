@@ -17,21 +17,37 @@ const quickQuestions = [
   "Cần chuẩn bị giấy tờ gì?",
 ];
 
-const initialMessages: Message[] = [
-  { from: "bot", text: "Chào bạn! Mình là trợ lý ảo của DuHoc24, bạn cần hỗ trợ gì về hồ sơ du học?" },
-];
+// Lời chào chỉ hiển thị ở giao diện, không lưu vào database.
+const GREETING: Message = {
+  from: "bot",
+  text: "Chào bạn! Mình là trợ lý ảo của DuHoc24, bạn cần hỗ trợ gì về hồ sơ du học?",
+};
 
 export function ChatWidget() {
   const [open, setOpen] = React.useState(false);
-  const [messages, setMessages] = React.useState<Message[]>(initialMessages);
+  const [messages, setMessages] = React.useState<Message[]>([]);
   const [input, setInput] = React.useState("");
   const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch("/api/chat")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled && Array.isArray(data.messages)) {
+          setMessages(data.messages);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function sendMessage(text: string) {
     const trimmed = text.trim();
     if (!trimmed || loading) return;
 
-    const history = messages;
     setMessages((prev) => [...prev, { from: "user", text: trimmed }]);
     setInput("");
     setLoading(true);
@@ -40,7 +56,7 @@ export function ChatWidget() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, history }),
+        body: JSON.stringify({ message: trimmed }),
       });
       const data = await res.json();
       const reply: string = res.ok && data.reply
@@ -76,7 +92,7 @@ export function ChatWidget() {
           </div>
 
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            {messages.map((m, i) => (
+            {[GREETING, ...messages].map((m, i) => (
               <div
                 key={i}
                 className={cn("flex", m.from === "user" ? "justify-end" : "justify-start")}

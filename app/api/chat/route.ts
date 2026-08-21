@@ -1,9 +1,12 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const runtime = "nodejs";
 
 const MODEL = "gemini-3.5-flash-lite";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+const CONVERSATION_COOKIE = "dh24_conv";
 
 const QNA = [
   {
@@ -57,25 +60,42 @@ Quy tắc trả lời:
 - Nếu câu hỏi của người dùng khớp với một hoặc nhiều mục trong bộ câu hỏi trên (trực tiếp hoặc là câu hỏi tiếp nối một mục đã trả lời trước đó trong hội thoại), trả lời dựa trên đúng (các) mục đó và ngữ cảnh hội thoại.
 - Chỉ khi câu hỏi hoàn toàn nằm ngoài cả bộ câu hỏi trên lẫn nội dung đã trao đổi trong hội thoại (ví dụ hỏi về chủ đề không liên quan gì tới DuHoc24/hồ sơ du học), mới lịch sự nói rằng bạn chưa có thông tin về việc đó, và hướng người dùng để lại câu hỏi trong khung chat hoặc để lại email/số điện thoại trong form báo giá để đội tư vấn liên hệ lại — không được bịa thông tin dịch vụ.`;
 
-interface ChatMessage {
-  from: "bot" | "user";
-  text: string;
+interface DbMessage {
+  sender: "user" | "bot";
+  content: string;
 }
 
-function buildContents(history: ChatMessage[], message: string) {
-  const trimmed = [...history];
-  while (trimmed.length > 0 && trimmed[0].from !== "user") {
-    trimmed.shift();
-  }
-  const recent = trimmed.slice(-12);
+function buildContents(history: DbMessage[]) {
+  return history.map((m) => ({
+    role: m.sender === "user" ? "user" : "model",
+    parts: [{ text: m.content }],
+  }));
+}
 
-  return [
-    ...recent.map((m) => ({
-      role: m.from === "user" ? "user" : "model",
-      parts: [{ text: m.text }],
-    })),
-    { role: "user", parts: [{ text: message }] },
-  ];
+// Trả về lịch sử hội thoại của khách (đọc từ Supabase qua cookie định danh
+// phiên). Widget dùng kết quả này để hiển thị — không còn giữ state ở client.
+export async function GET() {
+  const cookieStore = await cookies();
+  const conversationId = cookieStore.get(CONVERSATION_COOKIE)?.value;
+  if (!conversationId) {
+    return NextResponse.json({ messages: [] });
+  }
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("messages")
+    .select("sender, content")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("Supabase select messages failed:", error);
+    return NextResponse.json({ messages: [] });
+  }
+
+  return NextResponse.json({
+    messages: (data ?? []).map((m) => ({ from: m.sender, text: m.content })),
+  });
 }
 
 export async function POST(request: Request) {
@@ -87,7 +107,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { message?: unknown; history?: unknown };
+  let body: { message?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -99,14 +119,60 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Thiếu nội dung câu hỏi." }, { status: 400 });
   }
 
-  const history: ChatMessage[] = Array.isArray(body.history)
-    ? body.history.filter(
-        (m): m is ChatMessage =>
-          m &&
-          (m.from === "bot" || m.from === "user") &&
-          typeof m.text === "string",
-      )
-    : [];
+  const supabase = getSupabaseAdmin();
+  const cookieStore = await cookies();
+  let conversationId = cookieStore.get(CONVERSATION_COOKIE)?.value;
+
+  if (!conversationId) {
+    const { data, error } = await supabase
+      .from("conversations")
+      .insert({})
+      .select("id")
+      .single();
+    if (error || !data) {
+      console.error("Supabase create conversation failed:", error);
+      return NextResponse.json(
+        { error: "Không tạo được phiên hội thoại, bạn thử lại sau nhé." },
+        { status: 502 },
+      );
+    }
+    conversationId = data.id as string;
+    cookieStore.set(CONVERSATION_COOKIE, conversationId, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      // Không set maxAge/expires: cookie phiên, mất khi đóng hẳn trình duyệt.
+    });
+  }
+
+  const { data: priorMessages, error: historyError } = await supabase
+    .from("messages")
+    .select("sender, content")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true })
+    .limit(20);
+
+  if (historyError) {
+    console.error("Supabase select history failed:", historyError);
+    return NextResponse.json(
+      { error: "Không đọc được lịch sử hội thoại, bạn thử lại sau nhé." },
+      { status: 502 },
+    );
+  }
+
+  const { error: insertUserError } = await supabase.from("messages").insert({
+    conversation_id: conversationId,
+    sender: "user",
+    content: message,
+  });
+  if (insertUserError) {
+    console.error("Supabase insert user message failed:", insertUserError);
+    return NextResponse.json(
+      { error: "Không lưu được tin nhắn, bạn thử lại sau nhé." },
+      { status: 502 },
+    );
+  }
 
   try {
     const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
@@ -114,7 +180,10 @@ export async function POST(request: Request) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-        contents: buildContents(history, message),
+        contents: [
+          ...buildContents((priorMessages ?? []) as DbMessage[]),
+          { role: "user", parts: [{ text: message }] },
+        ],
         generationConfig: { temperature: 0.3, maxOutputTokens: 400 },
       }),
     });
@@ -139,6 +208,23 @@ export async function POST(request: Request) {
         { error: "Chatbot chưa có câu trả lời, bạn thử hỏi lại theo cách khác nhé." },
         { status: 502 },
       );
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error: insertBotError } = await supabase.from("messages").insert({
+      conversation_id: conversationId,
+      sender: "bot",
+      content: reply,
+    });
+    if (insertBotError) {
+      console.error("Supabase insert bot message failed:", insertBotError);
+    }
+    const { error: updateConvError } = await supabase
+      .from("conversations")
+      .update({ last_message_at: nowIso })
+      .eq("id", conversationId);
+    if (updateConvError) {
+      console.error("Supabase update conversation failed:", updateConvError);
     }
 
     return NextResponse.json({ reply });
