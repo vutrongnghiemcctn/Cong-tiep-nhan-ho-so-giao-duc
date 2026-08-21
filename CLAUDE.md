@@ -60,9 +60,10 @@ Không có bộ test nào trong repo hiện tại.
 - **[app/api/chat/route.ts](app/api/chat/route.ts)** — API route thật đầu tiên của app, đứng sau
   chatbot ở [components/landing/chat-widget.tsx](components/landing/chat-widget.tsx).
   - `POST` nhận `{ message }`, gọi Gemini (`GEMINI_API_KEY`, chỉ dùng server-side) với system
-    instruction nhúng nguyên bộ câu hỏi/đáp cố định — model bị ép chỉ trả lời trong phạm vi bộ QnA
-    đó, từ chối lịch sự nếu hỏi ngoài phạm vi (nhưng vẫn được dùng lịch sử hội thoại để trả lời câu
-    hỏi nối tiếp). Sửa nội dung QnA thì sửa trực tiếp mảng `QNA` trong file này.
+    instruction là kịch bản tư vấn có cấu trúc (persona, luồng hội thoại hỏi quốc gia → bậc học/ngành
+    → giới thiệu dịch vụ → thu thập tên/email/SĐT → mời đặt lịch tư vấn) — **không còn giới hạn trong
+    một bộ QnA cố định** như trước, model tự dẫn dắt hội thoại theo kịch bản. Sửa nội dung/luồng tư
+    vấn thì sửa trực tiếp `SYSTEM_INSTRUCTION` trong file này.
   - **Hội thoại được lưu vào Supabase**, không còn giữ ở state/localStorage phía client. Client
     (`chat-widget.tsx`) không tự quản lý lịch sử nữa — mỗi lần mở trang nó gọi `GET /api/chat` để
     lấy lại đúng hội thoại đã lưu, và `POST` chỉ gửi mỗi tin nhắn mới. Route tự đọc/ghi lịch sử từ
@@ -86,6 +87,20 @@ Không có bộ test nào trong repo hiện tại.
   `conversations`/`messages` (không qua `app/api/chat/route.ts`, không cần API route riêng vì đây là
   Server Component render trên server). Trang chi tiết dùng `notFound()` nếu id không tồn tại, tái
   dùng style bong bóng chat giống `chat-widget.tsx` cho nhất quán.
+- **Trích xuất lead** — trang chi tiết hội thoại có thêm card "Thông tin lead" và nút bấm (client
+  component [components/admin/extract-lead-button.tsx](components/admin/extract-lead-button.tsx)),
+  gọi `POST` tới
+  [app/api/admin/conversations/[id]/lead/route.ts](<app/api/admin/conversations/[id]/lead/route.ts>).
+  Route này đọc toàn bộ tin nhắn của hội thoại, gọi Gemini 3.5 Flash-Lite với
+  `responseMimeType: "application/json"` + `responseSchema` (structured output, không parse JSON tự
+  do) để trích xuất tên/email/SĐT/nước du học/bậc học/ngành học/thời gian rảnh/đã đặt lịch chưa/ghi
+  chú/đánh giá chất lượng lead (`good`/`ok`/`spam`), rồi `upsert` vào bảng `leads`
+  (`conversation_id` là unique key — trích xuất lại sẽ ghi đè, không tạo bản ghi trùng). Đây là hành
+  động **admin chủ động bấm**, không tự động chạy sau mỗi tin nhắn chat (tránh tốn API call không cần
+  thiết và tránh làm chậm phản hồi chatbot ở trang chủ). Bấm nút sẽ `router.refresh()` để load lại
+  Server Component với dữ liệu lead mới. Badge trạng thái lead (`LeadQualityBadge`,
+  `BookedConsultationBadge`) định nghĩa trong `components/status-badge.tsx`, theo đúng convention
+  ánh xạ trạng thái tập trung của file này.
 - **`lib/mock-data.ts` là nguồn dữ liệu và kiểu dữ liệu duy nhất** cho phần dữ liệu mock còn lại — các
   type domain chính (`School`, `AdmissionRequest`, `StudentProfile`, `DocStatus`, `RequestStatus`,
   `ServicePackage`) đều định nghĩa ở đây và được import khắp `app/` và `components/`. Khi thêm

@@ -85,3 +85,26 @@ export function RequestStatusBadge({ status, className }: { status: RequestStatu
     />
   );
 }
+
+export type LeadQuality = "good" | "ok" | "spam";
+
+export const leadQualityMeta: Record<LeadQuality, { label: string; tone: Tone }> = {
+  good: { label: "Tốt", tone: "green" },
+  ok: { label: "Tạm ổn", tone: "yellow" },
+  spam: { label: "Spam", tone: "red" },
+};
+
+export function LeadQualityBadge({ quality, className }: { quality: LeadQuality; className?: string }) {
+  const meta = leadQualityMeta[quality];
+  return <StatusBadge tone={meta.tone} label={meta.label} className={className} />;
+}
+
+export function BookedConsultationBadge({ booked, className }: { booked: boolean; className?: string }) {
+  return (
+    <StatusBadge
+      tone={booked ? "green" : "gray"}
+      label={booked ? "Đã đặt lịch tư vấn" : "Chưa đặt lịch"}
+      className={className}
+    />
+  );
+}

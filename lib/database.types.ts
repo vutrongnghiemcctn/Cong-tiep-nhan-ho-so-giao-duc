@@ -35,6 +35,62 @@ export type Database = {
         }
         Relationships: []
       }
+      leads: {
+        Row: {
+          availability: string | null
+          booked_consultation: boolean
+          conversation_id: string
+          country: string | null
+          education_level: string | null
+          email: string | null
+          extracted_at: string
+          full_name: string | null
+          id: string
+          major: string | null
+          notes: string | null
+          phone: string | null
+          quality: string
+        }
+        Insert: {
+          availability?: string | null
+          booked_consultation?: boolean
+          conversation_id: string
+          country?: string | null
+          education_level?: string | null
+          email?: string | null
+          extracted_at?: string
+          full_name?: string | null
+          id?: string
+          major?: string | null
+          notes?: string | null
+          phone?: string | null
+          quality: string
+        }
+        Update: {
+          availability?: string | null
+          booked_consultation?: boolean
+          conversation_id?: string
+          country?: string | null
+          education_level?: string | null
+          email?: string | null
+          extracted_at?: string
+          full_name?: string | null
+          id?: string
+          major?: string | null
+          notes?: string | null
+          phone?: string | null
+          quality?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "leads_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: true
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       messages: {
         Row: {
           content: string
